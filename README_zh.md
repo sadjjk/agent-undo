@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/github-banner.svg" alt="agent-undo banner" width="100%">
+</p>
+
 # agent-undo (`au`) — 中文版
 
 [English](README.md)
@@ -19,7 +23,7 @@ agent-undo（`au`）是本地优先的 AI 编码回滚工具，快照每次文�
 
 **方式一：下载预编译二进制**
 
-从 [Releases](../../releases) 下载对应平台的 `au` 二进制，放到 PATH 下即可（如 `~/.local/bin/`）。
+从 [Releases](../../releases) 下载对应平台的 `au` 二进制，放到 PATH 下即可（如 `~/.local/bin/`）。下载后需加执行权限：`chmod +x ~/.local/bin/au`
 
 **方式二：自行编译**
 

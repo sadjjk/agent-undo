@@ -7,7 +7,6 @@
 [English](README.md)
 
 > [peaktwilight/agent-undo](https://github.com/peaktwilight/agent-undo) v0.0.4 的 fork
-> 修复：**hook stdin 的 agent 不再硬编码 `"claude-code"`，支持自定义传入**
 
 ## 介绍
 
@@ -16,6 +15,7 @@ agent-undo（`au`）是本地优先的 AI 编码回滚工具，快照每次文�
 本 fork 在上游基础上增加了以下功能：
 
 - **[v0.0.4.1]** hook stdin 支持自定义 `agent` 字段，不再硬编码 `"claude-code"`
+- **[v0.0.4.2]** 文件删除事件归因修复，不再硬编码 `"unknown"`
 
 完整文档见上游 [README.md](README.md)。
 
@@ -64,3 +64,17 @@ cp target/release/au ~/.local/bin/au
 
 - `agent` **可选** — 不传则 fallback `"claude-code"`，向后兼容
 - 传入后 `au log` / `au sessions` / `au blame` 均按该 agent 归因
+
+### v0.0.4.2
+
+**背景**：上游 `src/daemon.rs` 中 `process_path()` 处理删除事件时，归因硬编码为 `"unknown"`，跳过了 `resolve_attribution()` 调用。即使 `au hook pre` 已写入 marker，删除事件仍无法归因到对应 agent。
+
+**改动文件**：
+
+| 文件 | 改动 |
+|------|------|
+| `src/daemon.rs` | 删除分支调用 `resolve_attribution(store)` 替代硬编码 `"unknown"`；有 marker 时正确归因，无 marker 时 fallback 行为不变 |
+
+**使用方法**：
+
+无需额外操作。`au hook pre` 写入 marker 后，同一 session 内的文件删除事件自动归因到对应 agent。

@@ -31,6 +31,8 @@ pub struct ClaudeHookInput {
     pub session_id: String,
     pub tool_name: String,
     #[serde(default)]
+    pub agent: Option<String>,
+    #[serde(default)]
     pub tool_input: serde_json::Value,
     #[serde(default)]
     #[allow(dead_code)] // parsed for PostToolUse inspection in v0.3
@@ -80,13 +82,13 @@ fn run_pre(input: ClaudeHookInput) -> Result<()> {
     if let Ok(response) = ipc::send(
         &paths,
         &ipc::Request::SessionStart {
-            agent: "claude-code".into(),
+            agent: input.agent.clone().unwrap_or_else(|| "claude-code".into()),
             metadata: Some(
                 serde_json::json!({
                     "session_id": input.session_id,
                     "tool_name": input.tool_name,
                     "file_path": input.file_path(),
-                    "tool": "claude-code"
+                    "tool": input.agent.as_deref().unwrap_or("claude-code")
                 })
                 .to_string(),
             ),
@@ -104,7 +106,7 @@ fn run_pre(input: ClaudeHookInput) -> Result<()> {
         &store,
         session::SessionStart {
             session_id: Some(input.session_id.clone()),
-            agent: "claude-code".into(),
+            agent: input.agent.clone().unwrap_or_else(|| "claude-code".into()),
             prompt: None,
             model: None,
             metadata,

@@ -2,137 +2,79 @@
   <img src="assets/github-banner.svg" alt="agent-undo banner" width="100%">
 </p>
 
-# agent-undo (`au`)
+# agent-undo (`au`) — 中文版
 
-[中文版](README_zh.md)
+[English](README_en.md)
 
-*Local-first rollback for AI coding agents. A single binary that snapshots every file your agent writes and lets you undo any session with one command.*
+> [peaktwilight/agent-undo](https://github.com/peaktwilight/agent-undo) v0.0.4 的 fork
 
-*agent-undo side-steps editor checkpoints, IDE history, and after-the-fact `git reflog` recovery — all of which silently fail when the agent has been given write access to the filesystem and acted faster than your save loop.*
+## 介绍
 
-```sh
-curl -fsSL https://agent-undo.com/install.sh | sh
-```
+agent-undo（`au`）是本地优先的 AI 编码回滚工具，快照每次文件写入，一键撤销任意 session。
 
-```sh
-cd my-project
-au init --install-hooks
-# ... agent goes wild ...
-au oops
-```
+本 fork 在上游基础上增加了以下功能：
 
-The crate is `agent-undo` (descriptive, panic-searchable, LLM-friendly). The binary it installs is `au` — same shape as `ripgrep` installing `rg`. You search for `agent-undo`; you type `au`.
+- **[v0.0.4.2]** 文件删除事件归因修复，不再硬编码 `"unknown"`
+- **[v0.0.4.1]** hook stdin 支持自定义 `agent` 字段，不再硬编码 `"claude-code"`
 
----
+完整文档见上游 [README_en.md](README_en.md)。
 
-## What it does
+## 安装
 
-Every AI coding agent today writes to your filesystem the same way you would: directly, immediately, and irreversibly. Editor checkpoints are an in-memory afterthought. `git` is not a save loop. When the agent moves faster than your commit cadence, the only safety net is an out-of-band log of every byte that hit disk.
+**方式一：下载预编译二进制**
 
-`au` is that log.
+从 [Releases](../../releases) 下载对应平台的 `au` 二进制，放到 PATH 下即可（如 `~/.local/bin/`）。下载后需加执行权限：`chmod +x ~/.local/bin/au`
 
-It runs as a small background daemon per project, snapshotting every file write into a content-addressable store (BLAKE3 hashes, zstd blobs, SQLite timeline). Every edit is attributed to an explicit session and, where integrations are available, to the agent that made it — Claude Code, Cursor, Cline, Aider, Codex, or you. Nothing ever leaves your machine.
+**方式二：自行编译**
 
-When something goes wrong, you type one word:
+需要 Rust 工具链（[rustup](https://rustup.rs)）：
 
 ```sh
-au oops
+git clone -b feat/hook-agent-field https://github.com/sadjjk/agent-undo.git
+cd agent-undo
+cargo build --release
+cp target/release/au ~/.local/bin/au
 ```
 
-and the last burst of agent edits is rolled back across every file that was touched. The rollback is itself recorded, so undo-the-undo is always one command away.
+## 修改记录
 
-## Use cases
+### v0.0.4.2
 
-1. **Recover from a bad agent edit.** The hero use case. `au oops`.
-2. **Audit what an agent actually changed.** `au log --agent claude-code --since 1h` and `au diff --session <id>`.
-3. **Per-line agent attribution.** `au blame <file>` — like `git blame`, but tells you which agent (or human) wrote each line.
-4. **Pin a known-good state before letting an agent loose.** `au pin "before refactor"` then `au unpin "before refactor"` later to restore.
-5. **Wrap terminal agents without changing how you invoke them.** `au wrap install --preset codex` then `eval "$(au wrap shellenv)"`.
-6. **Use built-in presets for common CLIs.** `au wrap presets`.
-7. **Auto-detect terminal agents already on your PATH.** `au wrap auto`.
+**背景**：上游 `src/daemon.rs` 中 `process_path()` 处理删除事件时，归因硬编码为 `"unknown"`，跳过了 `resolve_attribution()` 调用。即使 `au hook pre` 已写入 marker，删除事件仍无法归因到对应 agent。
 
-## Install
+**改动文件**：
 
-```sh
-curl -fsSL https://agent-undo.com/install.sh | sh
+| 文件 | 改动 |
+|------|------|
+| `src/daemon.rs` | 删除分支调用 `resolve_attribution(store)` 替代硬编码 `"unknown"`；有 marker 时正确归因，无 marker 时 fallback 行为不变 |
+
+**使用方法**：
+
+无需额外操作。`au hook pre` 写入 marker 后，同一 session 内的文件删除事件自动归因到对应 agent。
+
+### v0.0.4.1
+
+**背景**：上游 `src/hook.rs` 中 `run_pre()` 的 agent 硬编码为 `"claude-code"`，导致所有通过 `au hook pre` 传入的 session 归因都显示为 Claude Code，非 Claude Code 集成方无法区分来源。
+
+**改动文件**：
+
+| 文件 | 改动 |
+|------|------|
+| `src/hook.rs` | `ClaudeHookInput` 加 `agent: Option<String>`（`#[serde(default)]`）；`run_pre()` 两处 `"claude-code".into()` 改为 `input.agent.clone().unwrap_or_else(\|\| "claude-code".into())`；metadata 中 `"tool"` 同理 |
+| `ARCHITECTURE.md` | stdin schema 加 `agent` 字段；描述补充 agent 可选说明 |
+
+**使用方法**：
+
+`au hook pre` 的 stdin JSON 新增可选 `agent` 字段：
+
+```json
+{
+  "session_id": "abc123",
+  "tool_name": "Write",
+  "agent": "openclaw/feishu",
+  "tool_input": { "file_path": "/abs/path.rs" }
+}
 ```
 
-Or from source:
-
-```sh
-cargo install agent-undo
-```
-
-Or from the latest GitHub release: macOS (arm64, x64), Linux (x64, arm64) — single ~5 MB binary, no runtime.
-
-After install you'll have `au` on your PATH.
-
-## Quick start
-
-```sh
-cd my-project
-au init --install-hooks      # sets up .agent-undo/ and patches
-                              # ~/.claude/settings.json so Claude Code
-                              # edits are attributed automatically
-au serve --daemon             # background watcher
-
-# ... work normally with Claude Code / Cursor / Cline / Aider / Codex ...
-
-au log                        # see every file event, attributed
-au log --json                 # scriptable timeline output
-au status --json              # machine-readable health/status
-au sessions                   # list recent agent sessions
-au sessions --json            # machine-readable session rows
-au pin --list --json          # machine-readable pin rows
-au pin --list                 # inspect saved restore points
-au oops                       # undo the last burst of agent edits
-au doctor --json              # machine-readable health report
-au doctor --fix               # diagnose + repair common local issues
-```
-
-For terminal-first agents without hook support:
-
-```sh
-au wrap presets
-au wrap auto
-au wrap install --preset codex
-eval "$(au wrap shellenv)"
-codex run "..."
-```
-
-## How it works
-
-1. **Watch.** A `notify-rs` filesystem watcher sees every write in the project tree. `.gitignore` and `.agent-undoignore` are respected.
-2. **Snapshot.** Each changed file is hashed with BLAKE3 and written into a content-addressable object store under `.agent-undo/objects/`. Identical content dedupes automatically.
-3. **Attribute.** Before an agent writes, its hook (`au hook pre`), session shim (`au session start`), or project-local wrapper (`au wrap install --preset ...`) drops a small active-session marker. The watcher reads that marker on each event and tags the resulting timeline entry with the agent, session id, and tool name. If no explicit session is active, `au` falls back to a best-effort local process fingerprint.
-4. **Recover.** Every event lives in a SQLite timeline at `.agent-undo/timeline.db`. `restore`, `oops`, `diff`, `blame`, and `show` are all queries and inverse operations over that table. Every restore snapshots the current state first — you can never lose data by undoing.
-
-No cloud. No account. No telemetry. One binary. One SQLite file. Your code never leaves the machine.
-
-## Technical writeup
-
-If you want the deeper systems view — design, artifact status, and the current
-measured micro-evaluation — the public paper lives here:
-
-- PDF: `https://agent-undo.com/paper`
-- Source: [`paper/`](paper/)
-
-## Design rules
-
-- **The agent is an untrusted process.** Treat AI coding agents the way a security engineer treats any process with write access to your filesystem.
-- **Capture everything, delete nothing (until GC).**
-- **Zero friction or zero adoption.** Install in one command. Works with every major AI editor out of the box.
-- **Local-first, always.**
-- **Never destroy data to recover data.** Every restore creates a new snapshot first.
-
-Longer essay: [`PHILOSOPHY.md`](PHILOSOPHY.md).
-
-## Status
-
-`v0.0.x` — pre-alpha. The core pipeline works end-to-end. Integration tests passing. clippy `-D warnings` clean. CI green on Linux + macOS, with a focused Windows watcher/rollback lane proving `init` + watch + `log` + `oops` on hosted runners. Background daemon control remains Unix-first today.
-
-Coming next: first-class editor integrations, richer daemon control, and launch/distribution polish.
-
-## License
-
-Apache-2.0. See [`LICENSE`](LICENSE).
+- `agent` **可选** — 不传则 fallback `"claude-code"`，向后兼容
+- 传入后 `au log` / `au sessions` / `au blame` 均按该 agent 归因

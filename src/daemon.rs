@@ -177,6 +177,7 @@ fn process_path(store: &Store, path: &Path, config: &AppConfig) -> Result<()> {
     // If the path no longer exists, this is a deletion.
     if !path.exists() {
         if let Some((before_hash, size_before)) = store.get_file_state(&rel)? {
+            let attr = resolve_attribution(store);
             store.record_event(&NewEvent {
                 ts_ns,
                 path: rel.clone(),
@@ -184,12 +185,12 @@ fn process_path(store: &Store, path: &Path, config: &AppConfig) -> Result<()> {
                 after_hash: None,
                 size_before: Some(size_before),
                 size_after: None,
-                attribution: "unknown".into(),
-                confidence: "none".into(),
-                session_id: None,
-                pid: None,
-                process_name: None,
-                tool_name: None,
+                attribution: attr.agent,
+                confidence: attr.confidence,
+                session_id: attr.session_id,
+                pid: attr.pid,
+                process_name: attr.process_name,
+                tool_name: attr.tool_name,
             })?;
             store.delete_file_state(&rel)?;
             tracing::info!("deleted: {}", rel);

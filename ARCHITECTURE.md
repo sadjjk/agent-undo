@@ -104,6 +104,7 @@ While a session is active, **all writes from that PID and its children are tagge
   {
     "session_id": "abc123",
     "tool_name": "Write",
+    "agent": "openclaw/feishu",
     "tool_input": { "file_path": "/abs/path.rs", "content": "..." },
     "tool_response": { "success": true, "filePath": "/abs/path.rs" }
   }
@@ -132,7 +133,7 @@ While a session is active, **all writes from that PID and its children are tagge
   }
   ```
 
-  `agent-undo hook pre|post` reads the JSON from stdin, extracts `session_id` / `tool_name` / `tool_input.file_path`, and calls the daemon over the unix socket to tag the session.
+  `agent-undo hook pre|post` reads the JSON from stdin, extracts `session_id` / `tool_name` / `agent` / `tool_input.file_path`, and calls the daemon over the unix socket to tag the session. The `agent` field is optional — when omitted, it defaults to `"claude-code"` for backward compatibility. Third-party integrations (e.g. OpenClaw) can pass their own agent identifier (e.g. `"openclaw/feishu"`) for proper attribution.
 
   **Installer must merge, not replace** the existing hooks arrays — users likely already have entries. Load order across settings files (user → project → local) is merge-based, so simply appending is correct.
 

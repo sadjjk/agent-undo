@@ -145,6 +145,20 @@ enum Command {
     /// Restore the project to a previously pinned state.
     Unpin { label: String },
 
+    /// Preview and restore to a previous state with diff + confirmation.
+    Revert {
+        #[arg(long, conflicts_with = "session", conflicts_with = "pin")]
+        event: Option<Option<u64>>,
+        #[arg(long, conflicts_with = "event", conflicts_with = "pin")]
+        session: Option<Option<String>>,
+        #[arg(long, conflicts_with = "event", conflicts_with = "session")]
+        pin: Option<Option<String>>,
+        #[arg(long)]
+        confirm: bool,
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Show per-line agent attribution for a file (v2).
     Blame { file: String },
 
@@ -277,6 +291,13 @@ async fn main() -> Result<()> {
         Command::Oops { confirm } => cmd_oops(confirm),
         Command::Pin { label, list, json } => cmd_pin(label, list, json),
         Command::Unpin { label } => cmd_unpin(label),
+        Command::Revert {
+            event,
+            session,
+            pin,
+            confirm,
+            json,
+        } => cmd_revert(event, session, pin, confirm, json),
         Command::Blame { file } => cmd_blame(file),
         Command::Tui => cmd_tui(),
         Command::Exec {
@@ -1141,6 +1162,144 @@ fn cmd_unpin(label: String) -> Result<()> {
             println!("  ... and {} more", restored.len() - 20);
         }
     }
+    Ok(())
+}
+
+fn cmd_revert(
+    event: Option<Option<u64>>,
+    session: Option<Option<String>>,
+    pin: Option<Option<String>>,
+    confirm: bool,
+    json: bool,
+) -> Result<()> {
+    use dialoguer::Confirm;
+
+    let paths = ProjectPaths::discover()?;
+    let store = Store::open(paths)?;
+
+    let (plan, revert_type, revert_target): (Vec<restore::PlanItem>, String, String) =
+        match (event, session, pin) {
+            (Some(e), _, _) => {
+                let id = match e {
+                    Some(id) => id as i64,
+                    None => store
+                        .latest_user_event()?
+                        .ok_or_else(|| anyhow::anyhow!("no recent events"))?
+                        .id,
+                };
+                let plan = restore::plan_event(&store, id)?;
+                (plan, "event".to_string(), id.to_string())
+            }
+            (_, Some(s), _) => {
+                let sid = match s {
+                    Some(id) => id,
+                    None => store
+                        .latest_session()?
+                        .ok_or_else(|| anyhow::anyhow!("no sessions found"))?
+                        .id,
+                };
+                let plan = restore::plan_session(&store, &sid)?;
+                (plan, "session".to_string(), sid)
+            }
+            (_, _, Some(l)) => {
+                let label = match l {
+                    Some(label) => label,
+                    None => store
+                        .latest_pin()?
+                        .ok_or_else(|| anyhow::anyhow!("no pins found"))?
+                        .label,
+                };
+                let plan = restore::plan_pin(&store, &label)?;
+                (plan, "pin".to_string(), label)
+            }
+            _ => {
+                println!(
+                    "usage: au revert --event [id] | --session [id] | --pin [label]\n\
+                     \n\
+                     Preview and restore with diff + confirmation.\n\
+                     \n\
+                     Options:\n\
+                       --event [id]    revert a single event (latest if omitted)\n\
+                       --session [id]  revert an entire session (latest if omitted)\n\
+                       --pin [label]   revert to a pin point (latest if omitted)\n\
+                       --confirm       skip confirmation prompt (diff still shown)\n\
+                       --json          output as JSON"
+                );
+                return Ok(());
+            }
+        };
+
+    if plan.is_empty() {
+        if json {
+            println!(
+                r#"{{"revert_type":"{revert_type}","revert_target":"{revert_target}","file_count":0}}"#
+            );
+        } else {
+            println!("nothing to revert");
+        }
+        return Ok(());
+    }
+
+    let header = match revert_type.as_str() {
+        "event" => format!("event #{revert_target}"),
+        "session" => format!("session {revert_target}"),
+        "pin" => format!("to pin '{revert_target}'"),
+        _ => revert_target.clone(),
+    };
+
+    if json {
+        let output = restore::plan_to_json(&plan, &revert_type, &revert_target);
+        println!("{}", serde_json::to_string_pretty(&output)?);
+
+        let proceed = if confirm {
+            true
+        } else {
+            Confirm::new()
+                .with_prompt(format!("Roll back these {} file(s)?", plan.len()))
+                .default(true)
+                .interact()
+                .unwrap_or(false)
+        };
+
+        if !proceed {
+            println!("aborted.");
+            return Ok(());
+        }
+
+        let restored = restore::apply_plan(&store, &plan)?;
+        println!(
+            "restored {} file(s)",
+            restored.len()
+        );
+    } else {
+        let text = restore::format_plan(&plan, &header);
+        println!("{text}");
+
+        let proceed = if confirm {
+            true
+        } else {
+            Confirm::new()
+                .with_prompt(format!("Roll back these {} file(s)?", plan.len()))
+                .default(true)
+                .interact()
+                .unwrap_or(false)
+        };
+
+        if !proceed {
+            println!("aborted.");
+            return Ok(());
+        }
+
+        let restored = restore::apply_plan(&store, &plan)?;
+        println!();
+        println!("restored {} file(s):", restored.len());
+        for p in &restored {
+            println!("  {p}");
+        }
+        println!();
+        println!("tip: run `au log` to see the restore events — undo-the-undo is always one command away.");
+    }
+
     Ok(())
 }
 

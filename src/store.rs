@@ -439,6 +439,78 @@ impl Store {
         }
     }
 
+    /// Return the most recent session (ended or not).
+    pub fn latest_session(&self) -> Result<Option<SessionRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, agent, started_at_ns, ended_at_ns, prompt, model, metadata
+             FROM sessions ORDER BY started_at_ns DESC LIMIT 1",
+        )?;
+        let result = stmt.query_row([], |row| {
+            Ok(SessionRow {
+                id: row.get(0)?,
+                agent: row.get(1)?,
+                started_at_ns: row.get(2)?,
+                ended_at_ns: row.get(3)?,
+                prompt: row.get(4)?,
+                model: row.get(5)?,
+                metadata: row.get(6)?,
+            })
+        });
+        match result {
+            Ok(s) => Ok(Some(s)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Return the most recent pin.
+    pub fn latest_pin(&self) -> Result<Option<PinRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, event_id, label, created_at_ns FROM pins ORDER BY created_at_ns DESC LIMIT 1",
+        )?;
+        let result = stmt.query_row([], |row| {
+            Ok(PinRow {
+                id: row.get(0)?,
+                event_id: row.get(1)?,
+                label: row.get(2)?,
+                created_at_ns: row.get(3)?,
+            })
+        });
+        match result {
+            Ok(p) => Ok(Some(p)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Return the most recent non-restore event.
+    pub fn latest_user_event(&self) -> Result<Option<EventRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, ts_ns, path, before_hash, after_hash, size_before, size_after, attribution, session_id
+             FROM events
+             WHERE attribution NOT IN ('agent-undo-restore', 'pre-restore', 'initial-scan')
+             ORDER BY id DESC LIMIT 1",
+        )?;
+        let result = stmt.query_row([], |row| {
+            Ok(EventRow {
+                id: row.get(0)?,
+                ts_ns: row.get(1)?,
+                path: row.get(2)?,
+                before_hash: row.get(3)?,
+                after_hash: row.get(4)?,
+                size_before: row.get(5)?,
+                size_after: row.get(6)?,
+                attribution: row.get(7)?,
+                session_id: row.get(8)?,
+            })
+        });
+        match result {
+            Ok(ev) => Ok(Some(ev)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     /// Snapshot of every file's state as of just before `event_id`. Used by
     /// `restore --pin`: we want to restore the WHOLE PROJECT to its state at
     /// the moment the pin was created.

@@ -14,11 +14,72 @@
 // The oops/session variants are just bulk applications of `restore_file_to`.
 
 use anyhow::{bail, Context, Result};
+use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::store::{EventRow, NewEvent, Store};
+
+// ═══════════════════════════════════════════════════════════════
+// Revert plan types
+// ═══════════════════════════════════════════════════════════════
+
+/// Kind of change for a planned revert.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PlanKind {
+    Modified, // both sides have content, content differs
+    Created,  // old doesn't exist, new does → revert will delete
+    Deleted,  // old exists, new doesn't → revert will restore
+}
+
+/// A single file in a revert plan (read-only, for preview).
+#[derive(Debug, Clone)]
+pub struct PlanItem {
+    pub path: String,
+    pub kind: PlanKind,
+    pub old_content: Vec<u8>,     // target state content
+    pub new_content: Vec<u8>,     // current disk content
+    pub target_hash: Option<String>, // blob hash of target state
+    pub event_id: i64,
+    pub attribution: String,
+}
+
+/// JSON output structures (modeled after GitHub Commit API).
+#[derive(Serialize)]
+pub struct RevertJsonOutput {
+    pub revert_type: String,
+    pub revert_target: String,
+    pub file_count: usize,
+    pub stats: RevertStats,
+    pub files: Vec<RevertFile>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub restored: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub restored_files: Option<Vec<String>>,
+}
+
+#[derive(Serialize)]
+pub struct RevertStats {
+    pub additions: usize,
+    pub deletions: usize,
+    pub total: usize,
+}
+
+#[derive(Serialize)]
+pub struct RevertFile {
+    pub filename: String,
+    pub status: String,
+    pub additions: usize,
+    pub deletions: usize,
+    pub changes: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub patch: Option<String>,
+    pub before_hash: Option<String>,
+    pub after_hash: Option<String>,
+    pub event_id: i64,
+    pub attribution: String,
+}
 
 fn now_ns() -> i64 {
     SystemTime::now()
@@ -346,6 +407,295 @@ fn read_blob_as_text(store: &Store, hash: Option<&str>) -> Result<String> {
         }
         None => Ok(String::new()),
     }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Revert plan functions
+// ═══════════════════════════════════════════════════════════════
+
+/// Plan a revert for a single event.
+pub fn plan_event(store: &Store, event_id: i64) -> Result<Vec<PlanItem>> {
+    let ev = store
+        .get_event(event_id)?
+        .ok_or_else(|| anyhow::anyhow!("no event #{event_id}"))?;
+    let old_content = match &ev.before_hash {
+        Some(h) => store.read_blob(h)?,
+        None => Vec::new(),
+    };
+    let abs = store.paths.root.join(&ev.path);
+    let new_content = if abs.exists() && abs.is_file() {
+        fs::read(&abs).with_context(|| format!("reading {}", abs.display()))?
+    } else {
+        Vec::new()
+    };
+    let kind = match (&ev.before_hash, new_content.is_empty()) {
+        (Some(_), false) => PlanKind::Modified,
+        (None, false) => PlanKind::Created,
+        (Some(_), true) => PlanKind::Deleted,
+        (None, true) => PlanKind::Modified, // edge case
+    };
+    Ok(vec![PlanItem {
+        path: ev.path,
+        kind,
+        old_content,
+        new_content,
+        target_hash: ev.before_hash,
+        event_id: ev.id,
+        attribution: ev.attribution,
+    }])
+}
+
+/// Plan a revert for an entire session.
+pub fn plan_session(store: &Store, session_id: &str) -> Result<Vec<PlanItem>> {
+    let events = store.events_for_session(session_id)?;
+    if events.is_empty() {
+        return Ok(vec![]);
+    }
+    // Keep the FIRST event per file (its before_hash = pre-session state)
+    let mut earliest_per_file: HashMap<String, EventRow> = HashMap::new();
+    for ev in &events {
+        earliest_per_file.entry(ev.path.clone()).or_insert_with(|| ev.clone());
+    }
+    let mut plan = Vec::new();
+    let mut paths: Vec<String> = earliest_per_file.keys().cloned().collect();
+    paths.sort();
+    for path in paths {
+        let ev = &earliest_per_file[&path];
+        let old_content = match &ev.before_hash {
+            Some(h) => store.read_blob(h)?,
+            None => Vec::new(),
+        };
+        let abs = store.paths.root.join(&path);
+        let new_content = if abs.exists() && abs.is_file() {
+            fs::read(&abs).with_context(|| format!("reading {}", abs.display()))?
+        } else {
+            Vec::new()
+        };
+        let kind = match (&ev.before_hash, new_content.is_empty()) {
+            (Some(_), false) => PlanKind::Modified,
+            (None, false) => PlanKind::Created,
+            (Some(_), true) => PlanKind::Deleted,
+            (None, true) => PlanKind::Modified,
+        };
+        plan.push(PlanItem {
+            path,
+            kind,
+            old_content,
+            new_content,
+            target_hash: ev.before_hash.clone(),
+            event_id: ev.id,
+            attribution: ev.attribution.clone(),
+        });
+    }
+    Ok(plan)
+}
+
+/// Plan a revert to a pin point.
+pub fn plan_pin(store: &Store, label: &str) -> Result<Vec<PlanItem>> {
+    let pin = store
+        .find_pin(label)?
+        .ok_or_else(|| anyhow::anyhow!("no pin labeled '{label}'"))?;
+    let snapshot: BTreeMap<String, Option<String>> = store
+        .file_state_at_event(pin.event_id)?
+        .into_iter()
+        .collect();
+    let current_paths = store.current_tracked_paths()?;
+    let mut targets = BTreeSet::new();
+    for path in snapshot.keys() {
+        let _ = targets.insert(path.clone());
+    }
+    for path in current_paths {
+        let _ = targets.insert(path);
+    }
+    let mut plan = Vec::new();
+    for path in targets {
+        let pin_hash = snapshot.get(&path).cloned().flatten();
+        let old_content = match &pin_hash {
+            Some(h) => store.read_blob(h)?,
+            None => Vec::new(),
+        };
+        let abs = store.paths.root.join(&path);
+        let new_content = if abs.exists() && abs.is_file() {
+            fs::read(&abs).with_context(|| format!("reading {}", abs.display()))?
+        } else {
+            Vec::new()
+        };
+        let kind = match (&pin_hash, new_content.is_empty()) {
+            (Some(_), false) => PlanKind::Modified,
+            (None, false) => PlanKind::Created,
+            (Some(_), true) => PlanKind::Deleted,
+            (None, true) => PlanKind::Modified,
+        };
+        // Skip unchanged files
+        if kind == PlanKind::Modified && old_content == new_content {
+            continue;
+        }
+        plan.push(PlanItem {
+            path,
+            kind,
+            old_content,
+            new_content,
+            target_hash: pin_hash,
+            event_id: pin.event_id,
+            attribution: String::new(),
+        });
+    }
+    Ok(plan)
+}
+
+/// Format a plan for terminal output.
+pub fn format_plan(plan: &[PlanItem], header: &str) -> String {
+    use similar::{ChangeTag, TextDiff};
+
+    let mut out = String::new();
+    out.push_str(&format!("Would revert {} ({} file(s)):\n\n", header, plan.len()));
+
+    for item in plan {
+        let kind_str = match item.kind {
+            PlanKind::Modified => "modified",
+            PlanKind::Created => "added",
+            PlanKind::Deleted => "removed",
+        };
+        let extra = match item.kind {
+            PlanKind::Created => "  → will be deleted",
+            PlanKind::Deleted => "  → will be restored",
+            PlanKind::Modified => "",
+        };
+        out.push_str(&format!(
+            "  {:10} {} (event #{}){}\n",
+            kind_str, item.path, item.event_id, extra
+        ));
+    }
+    out.push('\n');
+
+    // Show diff for up to 20 files
+    if plan.len() <= 20 {
+        for item in plan {
+            // Binary check
+            let is_binary = item.old_content.contains(&0) || item.new_content.contains(&0);
+            if is_binary {
+                out.push_str(&format!(
+                    "--- a/{} (current)\n+++ b/{} (target)\n(binary file, {} bytes → {} bytes)\n\n",
+                    item.path,
+                    item.path,
+                    item.new_content.len(),
+                    item.old_content.len()
+                ));
+                continue;
+            }
+            let old_text = String::from_utf8_lossy(&item.new_content);
+            let new_text = String::from_utf8_lossy(&item.old_content);
+            let diff = TextDiff::from_lines(&old_text, &new_text);
+            out.push_str(&format!("--- a/{} (current)\n+++ b/{} (target)\n", item.path, item.path));
+            for change in diff.iter_all_changes() {
+                let sign = match change.tag() {
+                    ChangeTag::Delete => "-",
+                    ChangeTag::Insert => "+",
+                    ChangeTag::Equal => " ",
+                };
+                out.push_str(sign);
+                out.push_str(&change.to_string());
+            }
+            out.push('\n');
+        }
+    } else {
+        out.push_str(&format!(
+            "... (showing {} of {}, diff omitted for brevity)\n\n",
+            20.min(plan.len()),
+            plan.len()
+        ));
+    }
+    out.push_str(&format!("Roll back these {} file(s)?", plan.len()));
+    out
+}
+
+/// Convert a plan to JSON output.
+pub fn plan_to_json(plan: &[PlanItem], revert_type: &str, revert_target: &str) -> RevertJsonOutput {
+    use similar::{ChangeTag, TextDiff};
+
+    let mut files = Vec::new();
+    let mut total_additions = 0;
+    let mut total_deletions = 0;
+
+    for item in plan {
+        let status = match item.kind {
+            PlanKind::Modified => "modified",
+            PlanKind::Created => "added",
+            PlanKind::Deleted => "removed",
+        };
+        let is_binary = item.old_content.contains(&0) || item.new_content.contains(&0);
+        let (patch, additions, deletions) = if is_binary {
+            (None, 0, 0)
+        } else {
+            let old_text = String::from_utf8_lossy(&item.new_content);
+            let new_text = String::from_utf8_lossy(&item.old_content);
+            let diff = TextDiff::from_lines(&old_text, &new_text);
+            let mut add = 0;
+            let mut del = 0;
+            let mut patch_str = String::new();
+            for change in diff.iter_all_changes() {
+                match change.tag() {
+                    ChangeTag::Insert => add += 1,
+                    ChangeTag::Delete => del += 1,
+                    ChangeTag::Equal => {}
+                }
+                let sign = match change.tag() {
+                    ChangeTag::Delete => "-",
+                    ChangeTag::Insert => "+",
+                    ChangeTag::Equal => " ",
+                };
+                patch_str.push_str(sign);
+                patch_str.push_str(&change.to_string());
+            }
+            (Some(patch_str), add, del)
+        };
+        total_additions += additions;
+        total_deletions += deletions;
+
+        // Compute after_hash from current content
+        let after_hash = if item.new_content.is_empty() {
+            None
+        } else {
+            Some(blake3::hash(&item.new_content).to_hex().to_string())
+        };
+
+        files.push(RevertFile {
+            filename: item.path.clone(),
+            status: status.to_string(),
+            additions,
+            deletions,
+            changes: additions + deletions,
+            patch,
+            before_hash: item.target_hash.clone(),
+            after_hash,
+            event_id: item.event_id,
+            attribution: item.attribution.clone(),
+        });
+    }
+
+    RevertJsonOutput {
+        revert_type: revert_type.to_string(),
+        revert_target: revert_target.to_string(),
+        file_count: plan.len(),
+        stats: RevertStats {
+            additions: total_additions,
+            deletions: total_deletions,
+            total: total_additions + total_deletions,
+        },
+        files,
+        restored: None,
+        restored_files: None,
+    }
+}
+
+/// Apply a revert plan (reuses existing `restore_file_to`).
+pub fn apply_plan(store: &Store, plan: &[PlanItem]) -> Result<Vec<String>> {
+    let mut restored = Vec::new();
+    for item in plan {
+        restore_file_to(store, &item.path, item.target_hash.as_deref())?;
+        restored.push(item.path.clone());
+    }
+    Ok(restored)
 }
 
 #[cfg(test)]

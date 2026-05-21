@@ -14,6 +14,7 @@ agent-undo（`au`）是本地优先的 AI 编码回滚工具，快照每次文�
 
 本 fork 在上游基础上增加了以下功能：
 
+- **[v0.0.4.3]** 新增 `au revert` 命令：带 diff 预览 + 确认的安全恢复
 - **[v0.0.4.2]** 文件删除事件归因修复，不再硬编码 `"unknown"`
 - **[v0.0.4.1]** hook stdin 支持自定义 `agent` 字段，不再硬编码 `"claude-code"`
 
@@ -30,13 +31,53 @@ agent-undo（`au`）是本地优先的 AI 编码回滚工具，快照每次文�
 需要 Rust 工具链（[rustup](https://rustup.rs)）：
 
 ```sh
-git clone -b feat/hook-agent-field https://github.com/sadjjk/agent-undo.git
+git clone -b feat/v0.0.4.3-revert https://github.com/sadjjk/agent-undo.git
 cd agent-undo
 cargo build --release
 cp target/release/au ~/.local/bin/au
 ```
 
 ## 修改记录
+
+### v0.0.4.3
+
+**背景**：`au restore` / `au unpin` 直接执行无预览无确认，恢复操作越重（影响文件越多）反而越没有确认机制。
+
+**改动**：新增 `au revert` 命令，提供 diff 预览 + 交互确认 + 恢复，原命令不动。
+
+| 文件 | 改动 |
+|------|------|
+| `src/main.rs` | 新增 `Command::Revert` + `cmd_revert` |
+| `src/restore.rs` | 新增 `PlanItem`/`PlanKind`/`plan_event`/`plan_session`/`plan_pin`/`format_plan`/`plan_to_json`/`apply_plan` |
+| `src/store.rs` | 新增 `latest_session()`/`latest_pin()`/`latest_user_event()` |
+
+**使用方法**：
+
+```bash
+# 预览并恢复最近 session（带 diff + 确认）
+au revert --session
+
+# 恢复到指定 pin 点
+au revert --pin my-checkpoint
+
+# 恢复指定 event
+au revert --event 5
+
+# 不传 id/label 自动取最近一条
+au revert --event     # 最新 event
+au revert --session   # 最新 session
+au revert --pin       # 最新 pin
+
+# --confirm 跳过确认（diff 仍展示）
+au revert --session --confirm
+
+# --json 输出结构化数据（参考 GitHub Commit API）
+au revert --session --json
+```
+
+- `au revert` 是 `au restore` / `au unpin` 的安全超集，原命令不动
+- `--confirm` 跳过交互确认，diff 始终展示
+- `--json` 输出 JSON，字段参考 GitHub Commit API（`filename`/`status`/`additions`/`deletions`/`patch`/`before_hash`/`after_hash`）
 
 ### v0.0.4.2
 

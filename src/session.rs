@@ -13,6 +13,7 @@ pub struct SessionStart {
     pub prompt: Option<String>,
     pub model: Option<String>,
     pub metadata: Option<String>,
+    pub prompt_output: Option<String>,
     pub tool_name: Option<String>,
     pub intended_file: Option<String>,
     pub activate: bool,
@@ -23,6 +24,7 @@ pub struct ParsedSessionMetadata {
     pub session_id: Option<String>,
     pub prompt: Option<String>,
     pub model: Option<String>,
+    pub prompt_output: Option<String>,
     pub tool_name: Option<String>,
     pub intended_file: Option<String>,
     pub raw: Option<String>,
@@ -47,6 +49,10 @@ pub fn parse_metadata(raw: Option<&str>) -> Result<ParsedSessionMetadata> {
             .map(str::to_owned),
         model: value
             .get("model")
+            .and_then(|v| v.as_str())
+            .map(str::to_owned),
+        prompt_output: value
+            .get("prompt_output")
             .and_then(|v| v.as_str())
             .map(str::to_owned),
         tool_name: value
@@ -77,6 +83,7 @@ pub fn start(store: &Store, start: SessionStart) -> Result<String> {
         prompt: start.prompt,
         model: start.model,
         metadata: start.metadata,
+        prompt_output: start.prompt_output,
     })?;
 
     if start.activate {
@@ -95,8 +102,20 @@ pub fn start(store: &Store, start: SessionStart) -> Result<String> {
     Ok(session_id)
 }
 
-pub fn end(store: &Store, session_id: &str, clear_active: bool) -> Result<()> {
-    store.mark_session_ended(session_id, now_ns())?;
+pub fn end(
+    store: &Store,
+    session_id: &str,
+    parsed: Option<&ParsedSessionMetadata>,
+    clear_active: bool,
+) -> Result<()> {
+    store.end_session(
+        session_id,
+        now_ns(),
+        parsed.and_then(|p| p.prompt.as_deref()),
+        parsed.and_then(|p| p.model.as_deref()),
+        parsed.and_then(|p| p.prompt_output.as_deref()),
+        parsed.and_then(|p| p.raw.as_deref()),
+    )?;
 
     if clear_active {
         if let Some(current) = read_active_session(&store.paths)? {

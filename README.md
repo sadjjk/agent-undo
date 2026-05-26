@@ -14,6 +14,7 @@ agent-undo（`au`）是本地优先的 AI 编码回滚工具，快照每次文�
 
 本 fork 在上游基础上增加了以下功能：
 
+- **[v0.0.4.4]** sessions 表新增 `prompt_output` 列；`au session end` 新增 `--metadata` 参数；metadata 列使用 JSON merge
 - **[v0.0.4.3]** 新增 `au revert` 命令：带 diff 预览 + 确认的安全恢复
 - **[v0.0.4.2]** 文件删除事件归因修复，不再硬编码 `"unknown"`
 - **[v0.0.4.1]** hook stdin 支持自定义 `agent` 字段，不再硬编码 `"claude-code"`
@@ -31,13 +32,44 @@ agent-undo（`au`）是本地优先的 AI 编码回滚工具，快照每次文�
 需要 Rust 工具链（[rustup](https://rustup.rs)）：
 
 ```sh
-git clone -b feat/v0.0.4.3-revert https://github.com/sadjjk/agent-undo.git
+git clone -b feat/v0.0.4.4-prompt-output https://github.com/sadjjk/agent-undo.git
 cd agent-undo
 cargo build --release
 cp target/release/au ~/.local/bin/au
 ```
 
 ## 修改记录
+
+### v0.0.4.4
+
+**背景**：sessions 表的 `prompt`、`model` 字段始终为 null，`metadata` 只记录最后一次 `au hook pre` 的工具调用信息。无法回答"用户问了什么、agent 回了什么、用了什么模型"。且 `end_session` 的 metadata 使用 COALESCE 整体替换，会丢失 start 时写入的字段。
+
+**改动文件**：
+
+| 文件 | 改动 |
+|------|------|
+| `src/store.rs` | DDL 加 `prompt_output` 列 + 迁移；`mark_session_ended` → `end_session`（独立列 COALESCE + metadata JSON merge）；新增 `json_merge` / `_end_session_simple`；`list_sessions`/`latest_session` SELECT 加列 |
+| `src/session.rs` | `ParsedSessionMetadata` 加 `prompt_output`；`SessionStart` 加 `prompt_output`；`end()` 加 metadata 参数 |
+| `src/ipc.rs` | `Request::SessionEnd` 加 `metadata` 字段；handle_request 解析并传递 |
+| `src/main.rs` | `SessionCmd::End` 加 `--metadata` 参数；`cmd_session_end` 传参 |
+| `src/hook.rs` | `SessionStart` 构造加 `prompt_output: None`；`upsert_session` 调用适配 |
+
+**使用方法**：
+
+```bash
+# end 时补充 model + prompt_output
+au session end session-abc --metadata '{"model":"test-model-v2","prompt_output":"分析了现有架构，提出白名单方案"}'
+
+# end 时一次性写入所有字段
+au session end session-abc --metadata '{"prompt":"重构auth","model":"test-model-v2","prompt_output":"3个文件5处改动"}'
+
+# 不传 metadata，行为和之前一样
+au session end session-abc
+```
+
+- `prompt_output` 最大 500 字符，超出截断
+- `metadata` 列使用 JSON 浅合并（新 key 覆盖旧同名 key，旧 key 保留），不再整体替换
+- `parse_metadata` 的 `raw` 语义不变，保留完整原始输入快照
 
 ### v0.0.4.3
 

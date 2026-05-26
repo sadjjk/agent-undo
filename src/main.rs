@@ -211,6 +211,8 @@ enum SessionCmd {
     },
     End {
         session_id: String,
+        #[arg(long)]
+        metadata: Option<String>,
     },
 }
 
@@ -320,7 +322,10 @@ async fn main() -> Result<()> {
         Command::Session(SessionCmd::Start { agent, metadata }) => {
             cmd_session_start(agent, metadata)
         }
-        Command::Session(SessionCmd::End { session_id }) => cmd_session_end(session_id),
+        Command::Session(SessionCmd::End {
+            session_id,
+            metadata,
+        }) => cmd_session_end(session_id, metadata),
         Command::Hook(HookCmd::Pre) => hook::handle_pre(),
         Command::Hook(HookCmd::Post) => hook::handle_post(),
         Command::Gc => cmd_gc(),
@@ -1356,6 +1361,7 @@ fn cmd_exec(agent: String, label: Option<String>, quiet: bool, command: Vec<Stri
             prompt: label.clone(),
             model: None,
             metadata: Some(serde_json::json!({ "command": command }).to_string()),
+            prompt_output: None,
             tool_name: None,
             intended_file: None,
             activate: true,
@@ -1376,7 +1382,7 @@ fn cmd_exec(agent: String, label: Option<String>, quiet: bool, command: Vec<Stri
     let status = Proc::new(cmd).args(args).status();
 
     // Always clean up, even on error.
-    let _ = session::end(&store, &session_id, true);
+    let _ = session::end(&store, &session_id, None, true);
 
     match status {
         Ok(s) if s.success() => {
@@ -1509,6 +1515,7 @@ fn cmd_session_start(agent: String, metadata: Option<String>) -> Result<()> {
             prompt: parsed.prompt,
             model: parsed.model,
             metadata: parsed.raw,
+            prompt_output: parsed.prompt_output,
             tool_name: parsed.tool_name,
             intended_file: parsed.intended_file,
             activate: true,
@@ -1518,12 +1525,13 @@ fn cmd_session_start(agent: String, metadata: Option<String>) -> Result<()> {
     Ok(())
 }
 
-fn cmd_session_end(session_id: String) -> Result<()> {
+fn cmd_session_end(session_id: String, metadata: Option<String>) -> Result<()> {
     let paths = ProjectPaths::discover()?;
     if let Ok(response) = ipc::send(
         &paths,
         &ipc::Request::SessionEnd {
             session_id: session_id.clone(),
+            metadata: metadata.clone(),
         },
     ) {
         match response {
@@ -1536,7 +1544,8 @@ fn cmd_session_end(session_id: String) -> Result<()> {
         }
     }
     let store = Store::open(paths)?;
-    session::end(&store, &session_id, true)?;
+    let parsed = session::parse_metadata(metadata.as_deref())?;
+    session::end(&store, &session_id, Some(&parsed), true)?;
     println!("closed session {}", &session_id[..session_id.len().min(16)]);
     Ok(())
 }

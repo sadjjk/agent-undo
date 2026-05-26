@@ -28,6 +28,7 @@ pub enum Request {
     },
     SessionEnd {
         session_id: String,
+        metadata: Option<String>,
     },
     Shutdown,
     Sessions {
@@ -222,6 +223,7 @@ fn handle_request(
                     prompt: parsed.prompt,
                     model: parsed.model,
                     metadata: parsed.raw,
+                    prompt_output: parsed.prompt_output,
                     tool_name: parsed.tool_name,
                     intended_file: parsed.intended_file,
                     activate: true,
@@ -229,8 +231,12 @@ fn handle_request(
             )?;
             Ok(Response::SessionStarted { session_id })
         }
-        Request::SessionEnd { session_id } => {
-            session::end(&store, &session_id, true)?;
+        Request::SessionEnd {
+            session_id,
+            metadata,
+        } => {
+            let parsed = session::parse_metadata(metadata.as_deref())?;
+            session::end(&store, &session_id, Some(&parsed), true)?;
             Ok(Response::SessionEnded)
         }
         Request::Shutdown => {
@@ -424,6 +430,7 @@ mod tests {
             &paths,
             &Request::SessionEnd {
                 session_id: session_id.clone(),
+                metadata: None,
             },
         )
         .expect("session end")

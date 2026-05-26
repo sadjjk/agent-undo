@@ -66,7 +66,8 @@ impl Store {
                 ended_at_ns   INTEGER,
                 prompt        TEXT,
                 model         TEXT,
-                metadata      TEXT
+                metadata      TEXT,
+                prompt_output TEXT
             );
 
             CREATE TABLE IF NOT EXISTS pins (
@@ -86,6 +87,12 @@ impl Store {
             );
             "#,
         )?;
+
+        // Migration: add prompt_output column (v0.0.4.4)
+        self.conn
+            .execute("ALTER TABLE sessions ADD COLUMN prompt_output TEXT", [])
+            .ok();
+
         Ok(())
     }
 
@@ -349,14 +356,15 @@ impl Store {
     /// Insert or update a session. Idempotent on session id.
     pub fn upsert_session(&self, s: &SessionRow) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO sessions (id, agent, started_at_ns, ended_at_ns, prompt, model, metadata)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            "INSERT INTO sessions (id, agent, started_at_ns, ended_at_ns, prompt, model, metadata, prompt_output)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
              ON CONFLICT(id) DO UPDATE SET
                 agent         = excluded.agent,
                 ended_at_ns   = COALESCE(excluded.ended_at_ns, sessions.ended_at_ns),
                 prompt        = COALESCE(excluded.prompt, sessions.prompt),
                 model         = COALESCE(excluded.model, sessions.model),
-                metadata      = COALESCE(excluded.metadata, sessions.metadata)",
+                metadata      = COALESCE(excluded.metadata, sessions.metadata),
+                prompt_output = COALESCE(excluded.prompt_output, sessions.prompt_output)",
             params![
                 s.id,
                 s.agent,
@@ -365,22 +373,95 @@ impl Store {
                 s.prompt,
                 s.model,
                 s.metadata,
+                s.prompt_output,
             ],
         )?;
         Ok(())
     }
 
-    pub fn mark_session_ended(&self, session_id: &str, ts_ns: i64) -> Result<()> {
-        self.conn.execute(
-            "UPDATE sessions SET ended_at_ns = ?1 WHERE id = ?2 AND ended_at_ns IS NULL",
-            params![ts_ns, session_id],
-        )?;
+    /// End a session with optional metadata. Independent columns use COALESCE;
+    /// the metadata column uses JSON merge (shallow) to preserve existing keys.
+    pub fn end_session(
+        &self,
+        session_id: &str,
+        ts_ns: i64,
+        prompt: Option<&str>,
+        model: Option<&str>,
+        prompt_output: Option<&str>,
+        new_metadata: Option<&str>,
+    ) -> Result<()> {
+        // Truncate prompt_output to 500 chars
+        let prompt_output = prompt_output.map(|s| {
+            let mut s = s.to_owned();
+            s.truncate(500);
+            s
+        });
+
+        match new_metadata {
+            Some(new_raw) => {
+                // JSON merge: read old metadata, merge new keys into it
+                let old_raw: Option<String> = self
+                    .conn
+                    .query_row(
+                        "SELECT metadata FROM sessions WHERE id = ?1",
+                        params![session_id],
+                        |row| row.get(0),
+                    )
+                    .ok()
+                    .flatten();
+
+                let merged = match old_raw {
+                    Some(old) => Self::json_merge(&old, new_raw),
+                    None => new_raw.to_owned(),
+                };
+
+                self.conn.execute(
+                    "UPDATE sessions SET
+                        ended_at_ns   = ?1,
+                        prompt        = COALESCE(?2, prompt),
+                        model         = COALESCE(?3, model),
+                        prompt_output = COALESCE(?4, prompt_output),
+                        metadata      = ?5
+                     WHERE id = ?6",
+                    params![ts_ns, prompt, model, prompt_output, merged, session_id],
+                )?;
+            }
+            None => {
+                // Simplified path: no metadata, skip the SELECT
+                self.conn.execute(
+                    "UPDATE sessions SET
+                        ended_at_ns   = ?1,
+                        prompt        = COALESCE(?2, prompt),
+                        model         = COALESCE(?3, model),
+                        prompt_output = COALESCE(?4, prompt_output)
+                     WHERE id = ?5",
+                    params![ts_ns, prompt, model, prompt_output, session_id],
+                )?;
+            }
+        }
         Ok(())
+    }
+
+    /// JSON shallow merge: new keys overwrite old same-name keys, old keys preserved.
+    fn json_merge(old_raw: &str, new_raw: &str) -> String {
+        let mut old: serde_json::Value =
+            serde_json::from_str(old_raw).unwrap_or(serde_json::json!({}));
+        let new: serde_json::Value =
+            serde_json::from_str(new_raw).unwrap_or(serde_json::json!({}));
+
+        if let (serde_json::Value::Object(ref mut o), serde_json::Value::Object(ref n)) =
+            (&mut old, &new)
+        {
+            for (k, v) in n {
+                o.insert(k.clone(), v.clone());
+            }
+        }
+        serde_json::to_string(&old).unwrap_or_else(|_| new_raw.to_owned())
     }
 
     pub fn list_sessions(&self, limit: usize) -> Result<Vec<SessionRow>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, agent, started_at_ns, ended_at_ns, prompt, model, metadata
+            "SELECT id, agent, started_at_ns, ended_at_ns, prompt, model, metadata, prompt_output
              FROM sessions ORDER BY started_at_ns DESC LIMIT ?1",
         )?;
         let rows = stmt.query_map(params![limit as i64], |row| {
@@ -392,6 +473,7 @@ impl Store {
                 prompt: row.get(4)?,
                 model: row.get(5)?,
                 metadata: row.get(6)?,
+                prompt_output: row.get(7)?,
             })
         })?;
         rows.collect::<std::result::Result<Vec<_>, _>>()
@@ -442,7 +524,7 @@ impl Store {
     /// Return the most recent session (ended or not).
     pub fn latest_session(&self) -> Result<Option<SessionRow>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, agent, started_at_ns, ended_at_ns, prompt, model, metadata
+            "SELECT id, agent, started_at_ns, ended_at_ns, prompt, model, metadata, prompt_output
              FROM sessions ORDER BY started_at_ns DESC LIMIT 1",
         )?;
         let result = stmt.query_row([], |row| {
@@ -454,6 +536,7 @@ impl Store {
                 prompt: row.get(4)?,
                 model: row.get(5)?,
                 metadata: row.get(6)?,
+                prompt_output: row.get(7)?,
             })
         });
         match result {
@@ -686,6 +769,7 @@ pub struct SessionRow {
     pub prompt: Option<String>,
     pub model: Option<String>,
     pub metadata: Option<String>,
+    pub prompt_output: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

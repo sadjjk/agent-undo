@@ -110,6 +110,7 @@ fn run_pre(input: ClaudeHookInput) -> Result<()> {
             prompt: None,
             model: None,
             metadata,
+            prompt_output: None,
             tool_name: Some(input.tool_name.clone()),
             intended_file: input.file_path(),
             activate: true,
@@ -127,6 +128,7 @@ fn run_post(input: ClaudeHookInput) -> Result<()> {
         &paths,
         &ipc::Request::SessionEnd {
             session_id: input.session_id.clone(),
+            metadata: None,
         },
     ) {
         match response {
@@ -136,7 +138,7 @@ fn run_post(input: ClaudeHookInput) -> Result<()> {
         }
     }
     let store = Store::open(paths)?;
-    session::end(&store, &input.session_id, true)?;
+    session::end(&store, &input.session_id, None, true)?;
     Ok(())
 }
 

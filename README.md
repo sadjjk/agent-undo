@@ -32,7 +32,7 @@ agent-undo（`au`）是本地优先的 AI 编码回滚工具，快照每次文�
 需要 Rust 工具链（[rustup](https://rustup.rs)）：
 
 ```sh
-git clone -b feat/v0.0.4.4-prompt-output https://github.com/sadjjk/agent-undo.git
+git clone https://github.com/sadjjk/agent-undo.git
 cd agent-undo
 cargo build --release
 cp target/release/au ~/.local/bin/au

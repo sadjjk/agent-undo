@@ -21,6 +21,58 @@ agent-undo（`au`）是本地优先的 AI 编码回滚工具，快照每次文�
 
 完整文档见上游 [README_en.md](README_en.md)。
 
+## 使用
+
+Agent Undo 分三层使用，层层递进，强烈推荐三层都配置：
+
+- **1️⃣ au CLI** — 基础层，文件跟踪与回撤的命令行工具
+- **2️⃣ OpenClaw Hook** — 自动层，Agent 编辑时自动归因，无需手动
+- **3️⃣ au-viewer Skill** — 可视化层，浏览器浏览时间线 + 一键回滚
+
+### 1️⃣ au CLI — 命令行
+
+基础能力，独立于任何 Agent 框架：
+
+| 命令 | 说明 |
+|------|------|
+| `au init --install-hooks` | 初始化项目 |
+| `au serve --daemon` | 后台实时快照 |
+| `au session start/end` | 会话管理 |
+| `au hook pre/post` | 归因窗口 |
+| `au log / blame / diff` | 查询 |
+| `au oops` | 撤销最近一波 |
+| `au revert` | 指定回撤（本 fork 新增） |
+
+### 2️⃣ OpenClaw Hook — 自动归因
+
+在 OpenClaw 中启用 `agent-undo-hook` 插件，Agent 编辑文件时自动归因，无需手动执行 `au hook pre/post`：
+
+- Agent 开始编辑前 → hook 自动调 `au hook pre`
+- Agent 编辑结束 → hook 自动调 `au hook post`
+
+亮点：
+
+- **轮次级归因** — 一轮对话 = 一个 au session，该轮所有文件修改统一归因
+- **自动识别项目** — 写入时自动定位项目根，未初始化项目启发式提醒
+- **项目隔离** — 跨项目修改时独立开 session，互不干扰
+- **渠道类型归因** — feishu / cron / subagent 等渠道自动写入 agent 字段
+
+安装：[sadjjk/public-agent-skills-plugins/plugins/agent-undo-hook](https://github.com/sadjjk/public-agent-skills-plugins/tree/main/plugins/agent-undo-hook)
+
+### 3️⃣ au-viewer Skill — 可视化查看与回滚
+
+OpenClaw Skill，在浏览器中浏览项目文件变更时间线 + 一键回滚：
+
+- **触发**：`au-viewer <项目路径>` 或 `au-viewer`
+- **功能**：事件时间线、diff 查看、会话级/事件级回滚、文件 blame、全局快照、多主题切换
+
+| | |
+|---|---|
+| ![初始页](assets/初始页.jpg) <br/> **初始页** — 项目选择 + 快速入口 | ![事件明细](assets/事件明细.jpg) <br/> **事件明细** — 单次文件变更详情 |
+| ![恢复预览](assets/恢复预览.jpg) <br/> **恢复预览** — 左右 diff 对比 + 一键回滚 | |
+
+安装：[sadjjk/public-agent-skills-plugins/skills/au-viewer](https://github.com/sadjjk/public-agent-skills-plugins/tree/main/skills/au-viewer)
+
 ## 安装
 
 **方式一：下载预编译二进制**

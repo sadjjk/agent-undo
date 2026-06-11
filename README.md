@@ -21,7 +21,7 @@ agent-undo（`au`）是本地优先的 AI 编码回滚工具，快照每次文�
 
 完整文档见上游 [README_en.md](README_en.md)。
 
-## 使用
+## 完整工具链使用
 
 Agent Undo 分三层使用，层层递进，强烈推荐三层都配置：
 
@@ -73,7 +73,7 @@ OpenClaw Skill，在浏览器中浏览项目文件变更时间线 + 一键回滚
 
 安装：[sadjjk/public-agent-skills-plugins/skills/au-viewer](https://github.com/sadjjk/public-agent-skills-plugins/tree/main/skills/au-viewer)
 
-## 安装
+## CLI 安装
 
 **方式一：下载预编译二进制**
 

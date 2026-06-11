@@ -57,7 +57,7 @@ Agent Undo 分三层使用，层层递进，强烈推荐三层都配置：
 - **项目隔离** — 跨项目修改时独立开 session，互不干扰
 - **渠道类型归因** — feishu / cron / subagent 等渠道自动写入 agent 字段
 
-安装：[sadjjk/public-agent-skills-plugins/plugins/agent-undo-hook](https://github.com/sadjjk/public-agent-skills-plugins/tree/main/plugins/agent-undo-hook)
+安装：[sadjjk/public-agent-skills-plugins/plugins/agent-undo](https://github.com/sadjjk/public-agent-skills-plugins/tree/main/plugins/agent-undo)
 
 ### 3️⃣ au-viewer Skill — 可视化查看与回滚
 

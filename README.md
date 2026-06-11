@@ -68,8 +68,8 @@ OpenClaw Skill，在浏览器中浏览项目文件变更时间线 + 一键回滚
 
 | | |
 |---|---|
-| ![初始页](assets/初始页.jpg) <br/> **初始页** — 项目选择 + 快速入口 | ![事件明细](assets/事件明细.jpg) <br/> **事件明细** — 单次文件变更详情 |
-| ![恢复预览](assets/恢复预览.jpg) <br/> **恢复预览** — 左右 diff 对比 + 一键回滚 | |
+| ![初始页](assets/初始页.jpg) <br/> **初始页** — 项目选择 + 快速入口 | ![会话明细](assets/会话明细.jpg) <br/> **会话明细** — Session 级别操作记录 |
+| ![事件明细](assets/事件明细.jpg) <br/> **事件明细** — 单次文件变更详情 | ![恢复预览](assets/恢复预览.jpg) <br/> **恢复预览** — 左右 diff 对比 + 一键回滚 |
 
 安装：[sadjjk/public-agent-skills-plugins/skills/au-viewer](https://github.com/sadjjk/public-agent-skills-plugins/tree/main/skills/au-viewer)
 

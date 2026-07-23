@@ -14,6 +14,7 @@ agent-undo（`au`）是本地优先的 AI 编码回滚工具，快照每次文�
 
 本 fork 在上游基础上增加了以下功能：
 
+- **[v0.0.4.5]** `au revert --pin` 恢复预览修复：跳过 daemon 未跟踪删除的文件，预览只显示真实需要恢复的文件
 - **[v0.0.4.4]** sessions 表新增 `prompt_output` 列；`au session end` 新增 `--metadata` 参数；metadata 列使用 JSON merge
 - **[v0.0.4.3]** 新增 `au revert` 命令：带 diff 预览 + 确认的安全恢复
 - **[v0.0.4.2]** 文件删除事件归因修复，不再硬编码 `"unknown"`
@@ -91,6 +92,16 @@ cp target/release/au ~/.local/bin/au
 ```
 
 ## 修改记录
+
+### v0.0.4.5
+
+**背景**：`au revert --json --pin` 恢复预览返回大量已删除文件的脏数据。daemon 未运行时手动删除的文件，`file_state` 表残留行未清理，`plan_pin` 从 `events` 表重建快照时认为文件在 pin 时仍存在，分类为 `Deleted` 直接纳入恢复计划。
+
+**改动文件**：
+
+| 文件 | 改动 |
+|------|------|
+| `src/restore.rs` | `plan_pin` 对 `Deleted` 类型新增 `file_state` 检查——有行说明 daemon 从未跟踪到删除，跳过；无行说明 daemon 确认过删除，保留 |
 
 ### v0.0.4.4
 

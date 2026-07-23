@@ -530,6 +530,14 @@ pub fn plan_pin(store: &Store, label: &str) -> Result<Vec<PlanItem>> {
         if kind == PlanKind::Modified && old_content == new_content {
             continue;
         }
+        // Skip files that daemon never tracked a deletion for.
+        // file_state still has the row → daemon never called delete_file_state
+        // → can't confirm deletion happened after pin → skip
+        if kind == PlanKind::Deleted {
+            if store.get_file_state(&path)?.is_some() {
+                continue;
+            }
+        }
         plan.push(PlanItem {
             path,
             kind,
